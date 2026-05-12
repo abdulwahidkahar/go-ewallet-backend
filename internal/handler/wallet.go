@@ -181,3 +181,35 @@ func (wh *WalletHandler) Transfer(c *gin.Context) {
 		Amount:       req.Amount,
 	}})
 }
+
+func (wh *WalletHandler) GetHistoryTransfer(c *gin.Context) {
+	userID := int(c.MustGet("id").(float64))
+
+	query := `
+		SELECT t.id, t.from_wallet_id, t.to_wallet_id, t.amount, t.created_at
+		FROM transfers t
+		JOIN wallets w ON (t.from_wallet_id = w.id OR t.to_wallet_id = w.id)
+		WHERE w.user_id = $1
+		ORDER BY t.created_at DESC
+	`
+
+	rows, err := wh.db.QueryContext(c.Request.Context(), query, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error fetching transfer history"})
+		return
+	}
+	defer rows.Close()
+
+	var transfers []model.TransferResponse
+	for rows.Next() {
+		var transfer model.TransferResponse
+		err = rows.Scan(&transfer.ID, &transfer.FromWalletID, &transfer.ToWalletID, &transfer.Amount, &transfer.CreatedAt)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error scanning transfer data"})
+			return
+		}
+		transfers = append(transfers, transfer)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"transfers": transfers})
+}

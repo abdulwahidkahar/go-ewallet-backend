@@ -5,7 +5,6 @@ import (
 	"auth-api/internal/handler"
 	"fmt"
 	"log"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -31,10 +30,6 @@ func main() {
 	}
 	defer db.Close()
 
-	r.GET("/gin", func(c *gin.Context) {
-		c.JSON(http.StatusOK, "HELLO INI PAKE GIN")
-	})
-
 	authHandler := handler.NewAuthHandler(db, rdb)
 	walletHandler := handler.NewWalletHandler(db)
 
@@ -50,6 +45,7 @@ func main() {
 		api.POST("/wallet/topup", walletHandler.TopUp)
 		api.GET("/wallet/balance", walletHandler.GetBalance)
 		api.POST("/wallet/transfer", walletHandler.Transfer)
+		api.GET("/wallet/transfer", walletHandler.GetHistoryTransfer)
 	}
 
 	r.Run(":9090")
