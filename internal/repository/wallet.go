@@ -185,10 +185,11 @@ func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromUserI
 	}
 
 	var transferID int
+	var createdAt string
 	err = tx.QueryRowContext(ctx,
-		"INSERT INTO transfers (from_wallet_id, to_wallet_id, amount) VALUES ($1, $2, $3) RETURNING id",
+		"INSERT INTO transfers (from_wallet_id, to_wallet_id, amount) VALUES ($1, $2, $3) RETURNING id, created_at::text",
 		fromWallet.ID, toWallet.ID, amount,
-	).Scan(&transferID)
+	).Scan(&transferID, &createdAt)
 	if err != nil {
 		return model.TransferResponse{}, err
 	}
@@ -198,6 +199,7 @@ func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromUserI
 		FromWalletID: fromWallet.ID,
 		ToWalletID:   toWallet.ID,
 		Amount:       amount,
+		CreatedAt:    createdAt,
 	}, nil
 }
 
