@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"auth-api/internal/model"
-	"auth-api/internal/service"
+	"go-ewallet-backend/internal/model"
+	"go-ewallet-backend/internal/service"
 	"net/http"
 
 	"github.com/gin-gonic/gin"

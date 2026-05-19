@@ -1,11 +1,11 @@
 package service
 
 import (
-	"auth-api/internal/database"
-	"auth-api/internal/repository"
 	"context"
 	"database/sql"
 	"errors"
+	"go-ewallet-backend/internal/database"
+	"go-ewallet-backend/internal/repository"
 	"os"
 	"strings"
 	"time"

@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"auth-api/internal/database"
 	"fmt"
+	"go-ewallet-backend/internal/database"
 	"net/http"
 	"os"
 	"strings"

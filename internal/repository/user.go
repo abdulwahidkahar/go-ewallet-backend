@@ -1,10 +1,10 @@
 package repository
 
 import (
-	"auth-api/internal/model"
 	"context"
 	"database/sql"
 	"errors"
+	"go-ewallet-backend/internal/model"
 
 	"github.com/lib/pq"
 )

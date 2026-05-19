@@ -1,4 +1,4 @@
-module auth-api
+module go-ewallet-backend
 
 go 1.25.5
 

@@ -1,10 +1,10 @@
 package handler
 
 import (
-	"auth-api/internal/model"
-	"auth-api/internal/service"
 	"database/sql"
 	"errors"
+	"go-ewallet-backend/internal/model"
+	"go-ewallet-backend/internal/service"
 	"net/http"
 	"strconv"
 
@@ -37,6 +37,53 @@ func (wh *WalletHandler) TopUp(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Wallet topped up successfully", "top_up": req.Amount})
 }
 
+func (wh *WalletHandler) CreateTopUp(c *gin.Context) {
+	userID := int(c.MustGet("id").(float64))
+	idempotencyKey := c.GetHeader("Idempotency-Key")
+
+	var req model.CreateTopUpRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	order, err := wh.walletService.CreateTopUp(c.Request.Context(), userID, idempotencyKey, req)
+	if err != nil {
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Top up order created successfully",
+		"top_up":  order,
+	})
+}
+
+func (wh *WalletHandler) ConfirmTopUp(c *gin.Context) {
+	userID := int(c.MustGet("id").(float64))
+	idempotencyKey := c.GetHeader("Idempotency-Key")
+	referenceID := c.Param("reference_id")
+
+	var req model.ConfirmTopUpRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	order, err := wh.walletService.ConfirmTopUp(c.Request.Context(), userID, referenceID, idempotencyKey, req)
+	if err != nil {
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Top up confirmed successfully",
+		"top_up":  order,
+	})
+}
+
 func (wh *WalletHandler) GetBalance(c *gin.Context) {
 
 	userID := int(c.MustGet("id").(float64))
@@ -55,6 +102,7 @@ func (wh *WalletHandler) GetBalance(c *gin.Context) {
 func (wh *WalletHandler) Transfer(c *gin.Context) {
 
 	userID := int(c.MustGet("id").(float64))
+	idempotencyKey := c.GetHeader("Idempotency-Key")
 
 	var req model.TransferRequest
 
@@ -63,7 +111,7 @@ func (wh *WalletHandler) Transfer(c *gin.Context) {
 		return
 	}
 
-	transfer, err := wh.walletService.Transfer(c.Request.Context(), userID, req.ToWalletID, req.Amount)
+	transfer, err := wh.walletService.TransferWithIdempotency(c.Request.Context(), userID, idempotencyKey, req)
 	if err != nil {
 		statusCode, message := mapWalletError(err)
 		c.JSON(statusCode, gin.H{"error": message})
@@ -132,6 +180,34 @@ func (wh *WalletHandler) GetHistoryTopUp(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"top_ups": topUps})
 }
 
+func (wh *WalletHandler) GetTopUpOrders(c *gin.Context) {
+	userID := int(c.MustGet("id").(float64))
+
+	page := c.DefaultQuery("page", "1")
+	limit := c.DefaultQuery("limit", "10")
+
+	pageInt, err := strconv.Atoi(page)
+	if err != nil || pageInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page parameter"})
+		return
+	}
+
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil || limitInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
+		return
+	}
+
+	topUps, err := wh.walletService.GetTopUpOrders(c.Request.Context(), userID, pageInt, limitInt)
+	if err != nil {
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"top_ups": topUps})
+}
+
 func mapWalletError(err error) (int, string) {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -146,6 +222,16 @@ func mapWalletError(err error) (int, string) {
 		return http.StatusNotFound, "Sender wallet not found"
 	case err.Error() == "recipient wallet not found":
 		return http.StatusNotFound, "Recipient wallet not found"
+	case errors.Is(err, service.ErrIdempotencyKeyRequired):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, service.ErrIdempotencyKeyConflict):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, service.ErrIdempotencyRequestInProgress):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, service.ErrIdempotencyRequestFailed):
+		return http.StatusConflict, err.Error()
+	case err.Error() == "top up order already failed":
+		return http.StatusBadRequest, err.Error()
 	default:
 		return http.StatusInternalServerError, err.Error()
 	}

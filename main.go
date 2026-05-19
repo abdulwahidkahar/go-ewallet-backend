@@ -1,11 +1,11 @@
 package main
 
 import (
-	"auth-api/internal/database"
-	"auth-api/internal/handler"
-	"auth-api/internal/repository"
-	"auth-api/internal/service"
 	"fmt"
+	"go-ewallet-backend/internal/database"
+	"go-ewallet-backend/internal/handler"
+	"go-ewallet-backend/internal/repository"
+	"go-ewallet-backend/internal/service"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -33,8 +33,12 @@ func main() {
 	defer db.Close()
 
 	walletRepo := repository.NewWalletRepository(db)
+	topUpRepo := repository.NewTopUpRepository(db)
+	ledgerRepo := repository.NewLedgerRepository(db)
+	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	authService := service.NewAuthService(db, repository.NewUserRepository(db), walletRepo)
-	walletService := service.NewWalletService(db, walletRepo)
+	idempotencyService := service.NewIdempotencyService(idempotencyRepo)
+	walletService := service.NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, idempotencyService)
 	authHandler := handler.NewAuthHandler(authService, rdb)
 	walletHandler := handler.NewWalletHandler(walletService)
 
@@ -47,8 +51,11 @@ func main() {
 	{
 		api.GET("/profile", authHandler.Profile)
 		api.POST("/logout", authHandler.Logout)
-		api.POST("/wallet/topup", walletHandler.TopUp)
-		api.GET("/wallet/topup/history", walletHandler.GetHistoryTopUp)
+		api.POST("/wallet/topup", walletHandler.CreateTopUp)
+		api.GET("/wallet/topup/history", walletHandler.GetTopUpOrders)
+		api.POST("/wallet/topups", walletHandler.CreateTopUp)
+		api.POST("/wallet/topups/:reference_id/confirm", walletHandler.ConfirmTopUp)
+		api.GET("/wallet/topups", walletHandler.GetTopUpOrders)
 		api.GET("/wallet/balance", walletHandler.GetBalance)
 		api.POST("/wallet/transfer", walletHandler.Transfer)
 		api.GET("/wallet/transfer", walletHandler.GetHistoryTransfer)

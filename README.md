@@ -1,6 +1,12 @@
-# Go Payment Service
+# Go E-Wallet Backend Service
 
-REST API layanan pembayaran berbasis Go dengan fitur autentikasi JWT, profile retrieval, top up wallet, cek saldo, dan transfer saldo.
+REST API e-wallet berbasis Go dengan fitur:
+
+- JWT authentication
+- wallet balance snapshot
+- top up order lifecycle (`pending` -> `success`)
+- idempotent transfer dan top up request
+- immutable ledger entries untuk audit trail
 
 ## Tech Stack
 
@@ -11,6 +17,16 @@ REST API layanan pembayaran berbasis Go dengan fitur autentikasi JWT, profile re
 - Docker Compose
 - golang-migrate
 
+## Gambaran Arsitektur
+
+- `wallets.balance` dipakai sebagai current balance snapshot untuk query cepat.
+- `top_up_orders` menyimpan lifecycle top up.
+- `transfers` menyimpan business record transfer.
+- `ledger_entries` menyimpan jejak debit/credit yang immutable.
+- `idempotency_keys` mencegah request ganda memproses uang dua kali.
+
+Detail schema ada di [docs/production-wallet-schema.md](/Users/wahid/Documents/Development/GOLANG/auth-api/docs/production-wallet-schema.md:1).
+
 ## Endpoints
 
 | Method | Path | Auth | Description |
@@ -20,17 +36,35 @@ REST API layanan pembayaran berbasis Go dengan fitur autentikasi JWT, profile re
 | `GET` | `/health` | No | Health check service |
 | `POST` | `/api/logout` | Yes | Invalidate JWT dengan blacklist Redis |
 | `GET` | `/api/profile` | Yes | Ambil profile user dari JWT context |
-| `POST` | `/api/wallet/topup` | Yes | Tambah saldo wallet user login |
-| `GET` | `/api/wallet/topup/history` | Yes | Ambil riwayat top up user login |
 | `GET` | `/api/wallet/balance` | Yes | Ambil saldo wallet user login |
+| `POST` | `/api/wallet/topup` | Yes | Alias untuk create top up order |
+| `POST` | `/api/wallet/topups` | Yes | Create top up order baru |
+| `POST` | `/api/wallet/topups/:reference_id/confirm` | Yes | Confirm top up order |
+| `GET` | `/api/wallet/topups` | Yes | Ambil riwayat top up order user login |
+| `GET` | `/api/wallet/topup/history` | Yes | Alias history top up order |
 | `POST` | `/api/wallet/transfer` | Yes | Transfer saldo ke wallet lain |
 | `GET` | `/api/wallet/transfer` | Yes | Ambil riwayat transfer user login |
 
-Untuk endpoint yang butuh auth, kirim header:
+## Headers Penting
+
+Untuk endpoint yang butuh auth:
 
 ```http
 Authorization: Bearer <jwt-token>
 ```
+
+Untuk endpoint yang memindahkan uang atau membuat order transaksi:
+
+```http
+Idempotency-Key: <unique-client-generated-key>
+```
+
+Endpoint yang saat ini mewajibkan `Idempotency-Key`:
+
+- `POST /api/wallet/topup`
+- `POST /api/wallet/topups`
+- `POST /api/wallet/topups/:reference_id/confirm`
+- `POST /api/wallet/transfer`
 
 ## Menjalankan Project
 
@@ -45,7 +79,7 @@ Jalankan service:
 docker compose up --build
 ```
 
-Setelah container PostgreSQL siap, jalankan migration:
+Setelah container PostgreSQL siap, jalankan semua migration:
 
 ```bash
 migrate -path migrations -database "postgres://[DB_USER]:[DB_PASSWORD]@localhost:5432/[DB_NAME]?sslmode=disable" up
@@ -57,14 +91,15 @@ API akan berjalan di:
 http://localhost:9090
 ```
 
-Migration terbaru menambahkan tabel `top_up_history`, jadi pastikan file migration `000004_create_top_up_history_table.up.sql` ikut dijalankan sebelum mencoba endpoint riwayat top up.
+Schema terbaru menambah `idempotency_keys`, `top_up_orders`, `ledger_entries`, dan field baru di `transfers`, jadi pastikan migration `000005` sampai `000008` ikut dijalankan.
 
-## Contoh Flow Wallet
+## Contoh Flow
 
 Catatan:
 
 - Semua endpoint `/api/*` butuh header `Authorization: Bearer <jwt-token>`
-- Pada endpoint transfer, field `to_wallet_id` adalah `id` wallet tujuan, bukan `user_id`
+- Transfer memakai `to_wallet_id`, bukan `user_id`
+- Top up sekarang tidak langsung mengubah saldo saat order dibuat
 
 ### 1. Register
 
@@ -130,23 +165,26 @@ Response:
     "user_id": 1,
     "balance": 0,
     "currency": "IDR",
-    "created_at": "2026-05-17T10:00:00Z",
-    "updated_at": "2026-05-17T10:00:00Z"
+    "created_at": "2026-05-19T10:00:00Z",
+    "updated_at": "2026-05-19T10:00:00Z"
   }
 }
 ```
 
-### 4. Top Up
+### 4. Create Top Up Order
 
 Request:
 
 ```http
-POST /api/wallet/topup
+POST /api/wallet/topups
 Authorization: Bearer <jwt-token>
+Idempotency-Key: topup-create-user1-001
 Content-Type: application/json
 
 {
-  "amount": 50000
+  "amount": 50000,
+  "payment_channel": "manual",
+  "description": "Top up pertama"
 }
 ```
 
@@ -154,17 +192,66 @@ Response:
 
 ```json
 {
-  "message": "Wallet topped up successfully",
-  "top_up": 50000
+  "message": "Top up order created successfully",
+  "top_up": {
+    "id": 1,
+    "wallet_id": 1,
+    "reference_id": "TUP-20260519093000-ab12cd34",
+    "amount": 50000,
+    "status": "pending",
+    "payment_channel": "manual",
+    "description": "Top up pertama",
+    "created_at": "2026-05-19 09:30:00+00",
+    "updated_at": "2026-05-19 09:30:00+00"
+  }
 }
 ```
 
-### 5. Riwayat Top Up
+### 5. Confirm Top Up Order
 
 Request:
 
 ```http
-GET /api/wallet/topup/history
+POST /api/wallet/topups/TUP-20260519093000-ab12cd34/confirm
+Authorization: Bearer <jwt-token>
+Idempotency-Key: topup-confirm-user1-001
+Content-Type: application/json
+
+{
+  "external_reference": "SIM-VA-0001",
+  "description": "Simulated payment confirmation"
+}
+```
+
+Response:
+
+```json
+{
+  "message": "Top up confirmed successfully",
+  "top_up": {
+    "id": 1,
+    "wallet_id": 1,
+    "reference_id": "TUP-20260519093000-ab12cd34",
+    "amount": 50000,
+    "status": "success",
+    "payment_channel": "manual",
+    "external_reference": "SIM-VA-0001",
+    "description": "Simulated payment confirmation",
+    "balance_before": 0,
+    "balance_after": 50000,
+    "created_at": "2026-05-19 09:30:00+00",
+    "updated_at": "2026-05-19 09:31:10+00",
+    "confirmed_at": "2026-05-19 09:31:10+00"
+  }
+}
+```
+
+### 6. Riwayat Top Up Order
+
+Request:
+
+```http
+GET /api/wallet/topups
 Authorization: Bearer <jwt-token>
 ```
 
@@ -176,25 +263,36 @@ Response:
     {
       "id": 1,
       "wallet_id": 1,
+      "reference_id": "TUP-20260519093000-ab12cd34",
       "amount": 50000,
-      "created_at": "2026-05-17T10:05:00Z"
+      "status": "success",
+      "payment_channel": "manual",
+      "external_reference": "SIM-VA-0001",
+      "description": "Simulated payment confirmation",
+      "balance_before": 0,
+      "balance_after": 50000,
+      "created_at": "2026-05-19 09:30:00+00",
+      "updated_at": "2026-05-19 09:31:10+00",
+      "confirmed_at": "2026-05-19 09:31:10+00"
     }
   ]
 }
 ```
 
-### 6. Transfer
+### 7. Transfer
 
 Request:
 
 ```http
 POST /api/wallet/transfer
 Authorization: Bearer <jwt-token>
+Idempotency-Key: transfer-user1-001
 Content-Type: application/json
 
 {
   "to_wallet_id": 2,
-  "amount": 20000
+  "amount": 20000,
+  "description": "Bayar kopi"
 }
 ```
 
@@ -208,12 +306,19 @@ Response:
     "from_wallet_id": 1,
     "to_wallet_id": 2,
     "amount": 20000,
-    "created_at": "2026-05-17 10:10:00+00"
+    "reference_id": "TRF-20260519093500-ef56ab78",
+    "status": "success",
+    "description": "Bayar kopi",
+    "sender_balance_before": 50000,
+    "sender_balance_after": 30000,
+    "recipient_balance_before": 0,
+    "recipient_balance_after": 20000,
+    "created_at": "2026-05-19 09:35:00+00"
   }
 }
 ```
 
-### 7. Riwayat Transfer
+### 8. Riwayat Transfer
 
 Request:
 
@@ -232,7 +337,10 @@ Response:
       "from_wallet_id": 1,
       "to_wallet_id": 2,
       "amount": 20000,
-      "created_at": "2026-05-17T10:10:00Z"
+      "reference_id": "TRF-20260519093500-ef56ab78",
+      "status": "success",
+      "description": "Bayar kopi",
+      "created_at": "2026-05-19T09:35:00Z"
     }
   ]
 }
@@ -245,18 +353,23 @@ Response:
 3. Hit endpoint `GET /health` untuk memastikan service hidup.
 4. Register dua user agar masing-masing punya wallet otomatis.
 5. Login sebagai user pertama dan simpan JWT.
-6. Cek `GET /api/wallet/balance` untuk melihat `wallet.id` milik user pertama.
-7. Login sebagai user kedua lalu cek balance untuk mendapatkan `wallet.id` user kedua.
-8. Top up saldo user pertama.
-9. Cek `GET /api/wallet/topup/history` untuk memastikan history tercatat.
-10. Transfer dari user pertama ke `wallet.id` user kedua.
-11. Cek `GET /api/wallet/transfer` untuk memastikan history transfer tercatat.
-12. Cek ulang balance kedua user untuk memastikan saldo berubah sesuai transaksi.
+6. Login sebagai user kedua dan simpan JWT.
+7. Cek `GET /api/wallet/balance` dari kedua user untuk mendapatkan `wallet.id`.
+8. Buat top up order user pertama memakai `POST /api/wallet/topups`.
+9. Confirm top up order user pertama memakai `POST /api/wallet/topups/:reference_id/confirm`.
+10. Cek ulang balance user pertama untuk memastikan saldo bertambah.
+11. Transfer dari user pertama ke `wallet.id` user kedua memakai `POST /api/wallet/transfer`.
+12. Cek `GET /api/wallet/transfer` dan `GET /api/wallet/topups`.
+13. Cek ulang balance kedua user untuk memastikan saldo berubah sesuai transaksi.
 
 ## Error Umum
 
 - `401 Unauthorized`: token JWT tidak dikirim, tidak valid, atau sudah di-blacklist saat logout.
-- `404 Wallet not found`: wallet user belum ada atau data user/wallet di database tidak konsisten.
+- `400 idempotency key is required`: header `Idempotency-Key` wajib dikirim untuk endpoint transaksi tertentu.
+- `409 idempotency key already used with different payload`: key yang sama dipakai dengan request body berbeda.
+- `409 request with this idempotency key is still processing`: request sebelumnya dengan key yang sama masih diproses.
+- `409 previous request with this idempotency key failed`: request lama dengan key yang sama pernah gagal.
+- `404 Wallet not found`: wallet user belum ada atau data user/wallet tidak konsisten.
 - `400 amount must be greater than 0`: nominal top up atau transfer harus lebih besar dari nol.
 - `400 Insufficient balance`: saldo pengirim tidak cukup untuk transfer.
 - `404 Recipient wallet not found`: `to_wallet_id` tidak ada di tabel `wallets`.
@@ -273,18 +386,26 @@ Redis dipakai untuk blacklist karena:
 - cocok untuk data token invalidation yang sifatnya sementara
 - beban baca tinggi tidak membebani database utama
 
-PostgreSQL tidak dipakai untuk blacklist token karena:
+### Idempotency dipakai untuk request yang memindahkan uang
 
-- query disk-based lebih mahal untuk request yang frekuensinya tinggi
-- akan lebih cepat menjadi bottleneck saat jumlah request dan token bertambah
-- database relasional sebaiknya fokus ke data bisnis utama, bukan cache-like lookup berulang
+Request transaksi di mobile bisa terkirim dua kali karena retry, timeout, atau user menekan tombol berulang.
 
-### UNIQUE constraint wajib ada di database, bukan hanya di kode
+Karena itu, request seperti create top up, confirm top up, dan transfer memakai `Idempotency-Key` agar:
 
-Validasi email unik di application layer saja tidak cukup. Dua request paralel bisa lolos pengecekan kode pada waktu yang hampir sama lalu mencoba insert data yang sama.
+- 1 intent user tidak menghasilkan 2 transaksi
+- duplicate request bisa mengembalikan hasil lama
+- payload yang berbeda dengan key yang sama bisa ditolak
 
-Karena itu, constraint `UNIQUE` disimpan di tabel `users` sebagai last line of defense. Application layer tetap menangani error duplicate dengan response yang jelas, tetapi integritas final tetap dijaga database.
+### Ledger entries dipakai sebagai audit trail immutable
+
+`wallets.balance` hanya dipakai sebagai snapshot saldo saat ini.
+
+Sumber audit utama ada di `ledger_entries` karena:
+
+- setiap pergerakan saldo punya record debit/credit
+- ledger tidak di-update ulang setelah dibuat
+- jejak uang lebih mudah dijelaskan dan diuji
 
 ### Balance memakai int64 dan transfer memakai FOR UPDATE
 
-Saldo disimpan sebagai `int64`, bukan `float64`, karena nilai uang tidak boleh terkena error pembulatan floating-point yang bisa membuat hasil top up, debit, atau transfer menjadi tidak presisi; untuk transaksi, query `FOR UPDATE` dipakai saat membaca wallet pengirim dan penerima agar kedua row terkunci di dalam satu transaksi, sehingga request paralel tidak membaca balance lama, tidak saling menimpa update, dan risiko double spending bisa ditekan.
+Saldo disimpan sebagai `int64`, bukan `float64`, agar tidak terkena error pembulatan floating-point. Untuk transfer, query `FOR UPDATE` dipakai saat membaca wallet pengirim dan penerima agar kedua row terkunci di dalam satu transaksi dan risiko double spending bisa ditekan.

@@ -1,10 +1,12 @@
 package repository
 
 import (
-	"auth-api/internal/model"
 	"context"
 	"database/sql"
 	"errors"
+	"go-ewallet-backend/internal/model"
+	"strconv"
+	"time"
 )
 
 type WalletRepository struct {
@@ -107,7 +109,73 @@ func (r *WalletRepository) CreateTopUpHistoryTx(ctx context.Context, tx *sql.Tx,
 	return nil
 }
 
+func (r *WalletRepository) GetWalletByIDForUpdateTx(ctx context.Context, tx *sql.Tx, walletID int) (model.WalletBalanceSnapshot, error) {
+	var wallet model.WalletBalanceSnapshot
+
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT id, user_id, balance, currency
+		FROM wallets
+		WHERE id = $1
+		FOR UPDATE`,
+		walletID,
+	).Scan(&wallet.ID, &wallet.UserID, &wallet.Balance, &wallet.Currency)
+	if err != nil {
+		return model.WalletBalanceSnapshot{}, err
+	}
+
+	return wallet, nil
+}
+
+func (r *WalletRepository) UpdateBalanceByWalletIDTx(ctx context.Context, tx *sql.Tx, walletID int, amount int64) error {
+	result, err := tx.ExecContext(
+		ctx,
+		"UPDATE wallets SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+		amount,
+		walletID,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
+}
+
 func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromWalletID, toWalletID int, amount int64) (model.TransferResponse, error) {
+	return r.TransferWithMetadataTx(ctx, tx, TransferRequestParams{
+		FromWalletID:     fromWalletID,
+		ToWalletID:       toWalletID,
+		Amount:           amount,
+		ReferenceID:      "",
+		Description:      "",
+		IdempotencyKeyID: nil,
+		CreatedByUserID:  nil,
+	})
+}
+
+type TransferRequestParams struct {
+	FromWalletID     int
+	ToWalletID       int
+	Amount           int64
+	ReferenceID      string
+	Description      string
+	IdempotencyKeyID *int
+	CreatedByUserID  *int
+}
+
+func (r *WalletRepository) TransferWithMetadataTx(ctx context.Context, tx *sql.Tx, params TransferRequestParams) (model.TransferResponse, error) {
+	fromWalletID := params.FromWalletID
+	toWalletID := params.ToWalletID
+	amount := params.Amount
+
 	if fromWalletID == toWalletID {
 		return model.TransferResponse{}, errors.New("cannot transfer to the same wallet")
 	}
@@ -156,6 +224,11 @@ func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromWalle
 		return model.TransferResponse{}, errors.New("insufficient balance")
 	}
 
+	senderBalanceBefore := fromWallet.Balance
+	senderBalanceAfter := fromWallet.Balance - amount
+	recipientBalanceBefore := toWallet.Balance
+	recipientBalanceAfter := toWallet.Balance + amount
+
 	_, err = tx.ExecContext(ctx,
 		"UPDATE wallets SET balance = balance - $1 WHERE id = $2",
 		amount, fromWallet.ID,
@@ -174,26 +247,110 @@ func (r *WalletRepository) TransferTx(ctx context.Context, tx *sql.Tx, fromWalle
 
 	var transferID int
 	var createdAt string
+	var idempotencyKeyID any
+	var createdByUserID any
+
+	if params.IdempotencyKeyID != nil {
+		idempotencyKeyID = *params.IdempotencyKeyID
+	}
+	if params.CreatedByUserID != nil {
+		createdByUserID = *params.CreatedByUserID
+	}
+
+	referenceID := params.ReferenceID
+	if referenceID == "" {
+		referenceID = "legacy-transfer-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+
 	err = tx.QueryRowContext(ctx,
-		"INSERT INTO transfers (from_wallet_id, to_wallet_id, amount) VALUES ($1, $2, $3) RETURNING id, created_at::text",
-		fromWallet.ID, toWallet.ID, amount,
+		`INSERT INTO transfers (
+			from_wallet_id,
+			to_wallet_id,
+			amount,
+			reference_id,
+			status,
+			description,
+			idempotency_key_id,
+			sender_balance_before,
+			sender_balance_after,
+			recipient_balance_before,
+			recipient_balance_after,
+			created_by_user_id
+		) VALUES ($1, $2, $3, $4, 'success', NULLIF($5, ''), $6, $7, $8, $9, $10, $11)
+		RETURNING id, created_at::text`,
+		fromWallet.ID,
+		toWallet.ID,
+		amount,
+		referenceID,
+		params.Description,
+		idempotencyKeyID,
+		senderBalanceBefore,
+		senderBalanceAfter,
+		recipientBalanceBefore,
+		recipientBalanceAfter,
+		createdByUserID,
 	).Scan(&transferID, &createdAt)
 	if err != nil {
 		return model.TransferResponse{}, err
 	}
 
 	return model.TransferResponse{
-		ID:           transferID,
-		FromWalletID: fromWallet.ID,
-		ToWalletID:   toWallet.ID,
-		Amount:       amount,
-		CreatedAt:    createdAt,
+		ID:                     transferID,
+		FromWalletID:           fromWallet.ID,
+		ToWalletID:             toWallet.ID,
+		Amount:                 amount,
+		ReferenceID:            referenceID,
+		Status:                 "success",
+		Description:            params.Description,
+		SenderBalanceBefore:    senderBalanceBefore,
+		SenderBalanceAfter:     senderBalanceAfter,
+		RecipientBalanceBefore: recipientBalanceBefore,
+		RecipientBalanceAfter:  recipientBalanceAfter,
+		CreatedAt:              createdAt,
 	}, nil
+}
+
+func (r *WalletRepository) GetTransferByID(ctx context.Context, runner queryRowExecer, id int) (model.TransferResponse, error) {
+	runner = resolveQueryRunner(r, runner)
+
+	var transfer model.TransferResponse
+	var description sql.NullString
+
+	err := runner.QueryRowContext(
+		ctx,
+		`SELECT id, from_wallet_id, to_wallet_id, amount, reference_id, status, description,
+			sender_balance_before, sender_balance_after, recipient_balance_before, recipient_balance_after, created_at::text
+		FROM transfers
+		WHERE id = $1`,
+		id,
+	).Scan(
+		&transfer.ID,
+		&transfer.FromWalletID,
+		&transfer.ToWalletID,
+		&transfer.Amount,
+		&transfer.ReferenceID,
+		&transfer.Status,
+		&description,
+		&transfer.SenderBalanceBefore,
+		&transfer.SenderBalanceAfter,
+		&transfer.RecipientBalanceBefore,
+		&transfer.RecipientBalanceAfter,
+		&transfer.CreatedAt,
+	)
+	if err != nil {
+		return model.TransferResponse{}, err
+	}
+
+	if description.Valid {
+		transfer.Description = description.String
+	}
+
+	return transfer, nil
 }
 
 func (r *WalletRepository) TransferHistory(ctx context.Context, userID int, page, limit int) ([]model.TransferHistory, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT t.id, t.from_wallet_id, t.to_wallet_id, t.amount, t.created_at
+		`SELECT t.id, t.from_wallet_id, t.to_wallet_id, t.amount, t.reference_id, t.status, t.description, t.created_at
 		FROM transfers t
 		JOIN wallets w ON (t.from_wallet_id = w.id OR t.to_wallet_id = w.id)
 		WHERE w.user_id = $1
@@ -207,9 +364,13 @@ func (r *WalletRepository) TransferHistory(ctx context.Context, userID int, page
 	var history []model.TransferHistory
 	for rows.Next() {
 		var transfer model.TransferHistory
-		err := rows.Scan(&transfer.ID, &transfer.FromWalletID, &transfer.ToWalletID, &transfer.Amount, &transfer.CreatedAt)
+		var description sql.NullString
+		err := rows.Scan(&transfer.ID, &transfer.FromWalletID, &transfer.ToWalletID, &transfer.Amount, &transfer.ReferenceID, &transfer.Status, &description, &transfer.CreatedAt)
 		if err != nil {
 			return nil, err
+		}
+		if description.Valid {
+			transfer.Description = description.String
 		}
 		history = append(history, transfer)
 	}
@@ -218,6 +379,14 @@ func (r *WalletRepository) TransferHistory(ctx context.Context, userID int, page
 	}
 
 	return history, nil
+}
+
+func resolveQueryRunner(walletRepo *WalletRepository, runner queryRowExecer) queryRowExecer {
+	if runner != nil {
+		return runner
+	}
+
+	return walletRepo.db
 }
 
 func (r *WalletRepository) TopUpHistory(ctx context.Context, userID int, page, limit int) ([]model.TopUpHistory, error) {

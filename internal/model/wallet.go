@@ -9,6 +9,13 @@ type Wallet struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+type WalletBalanceSnapshot struct {
+	ID       int
+	UserID   int
+	Balance  int64
+	Currency string
+}
+
 type WalletRequest struct {
 	Amount int64 `json:"amount"`
 }

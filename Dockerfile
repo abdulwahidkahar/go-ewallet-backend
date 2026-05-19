@@ -7,7 +7,6 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -o auth-api .
+RUN go build -o go-ewallet-backend .
 EXPOSE 9090
-CMD ["./auth-api"]
-
+CMD ["./go-ewallet-backend"]
