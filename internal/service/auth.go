@@ -15,6 +15,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+var ErrInvalidCredentials = errors.New("invalid email or password")
+var ErrUserNotFound = errors.New("user not found")
+var ErrTokenGeneration = errors.New("error generating token")
+
 type AuthService struct {
 	db         *sql.DB
 	userRepo   *repository.UserRepository
@@ -67,16 +71,16 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 	}
 
 	if userID == 0 {
-		return "", errors.New("invalid email or password")
+		return "", ErrInvalidCredentials
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
-		return "", errors.New("invalid email or password")
+		return "", ErrInvalidCredentials
 	}
 
 	token, err := generateToken(userID, email)
 	if err != nil {
-		return "", errors.New("error generating token")
+		return "", ErrTokenGeneration
 	}
 
 	return token, nil
@@ -96,6 +100,9 @@ func (s *AuthService) Profile(ctx context.Context, userID int) (string, error) {
 	email, _, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return "", err
+	}
+	if email == "" {
+		return "", ErrUserNotFound
 	}
 
 	return email, nil

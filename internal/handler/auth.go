@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"go-ewallet-backend/internal/model"
+	"go-ewallet-backend/internal/repository"
 	"go-ewallet-backend/internal/service"
 	"net/http"
 
@@ -33,7 +35,8 @@ func (ah *AuthHandler) Register(c *gin.Context) {
 
 	_, err := ah.userService.Register(c.Request.Context(), req.Email, req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		statusCode, message := mapAuthError(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
@@ -60,9 +63,8 @@ func (ah *AuthHandler) Login(c *gin.Context) {
 
 	token, err := ah.userService.Login(c.Request.Context(), req.Email, req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		statusCode, message := mapAuthError(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
@@ -99,9 +101,8 @@ func (ah *AuthHandler) Profile(c *gin.Context) {
 
 	email, err := ah.userService.Profile(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "User not found",
-		})
+		statusCode, message := mapAuthError(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
@@ -112,4 +113,19 @@ func (ah *AuthHandler) Profile(c *gin.Context) {
 
 func (ah *AuthHandler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Server is running"})
+}
+
+func mapAuthError(err error) (int, string) {
+	switch {
+	case errors.Is(err, repository.ErrEmailAlreadyRegistered):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, service.ErrInvalidCredentials):
+		return http.StatusUnauthorized, err.Error()
+	case errors.Is(err, service.ErrUserNotFound):
+		return http.StatusNotFound, "User not found"
+	case errors.Is(err, service.ErrTokenGeneration):
+		return http.StatusInternalServerError, err.Error()
+	default:
+		return http.StatusInternalServerError, err.Error()
+	}
 }
