@@ -27,6 +27,10 @@ REST API e-wallet berbasis Go dengan fitur:
 
 Detail schema ada di [docs/production-wallet-schema.md](/Users/wahid/Documents/Development/GOLANG/auth-api/docs/production-wallet-schema.md:1).
 
+### Idempotency Flow
+
+![Idempotency Flow](docs/idempotency_flow.gif)
+
 ## Endpoints
 
 | Method | Path | Auth | Description |
