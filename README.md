@@ -82,6 +82,29 @@ Prasyarat:
 - Docker dan Docker Compose tersedia
 - CLI `migrate` dari `golang-migrate` sudah terpasang
 
+### Developer Commands
+
+Repo ini sekarang punya `Makefile` sederhana supaya lebih cepat dicoba:
+
+```bash
+make up
+make migrate-up
+make test
+make run
+```
+
+Command yang tersedia:
+
+- `make up`: jalankan PostgreSQL, Redis, dan backend via Docker Compose
+- `make down`: matikan service Docker Compose
+- `make logs`: lihat log container
+- `make run`: jalankan API secara lokal
+- `make test`: jalankan semua test
+- `make test-race`: jalankan test dengan race detector
+- `make migrate-up`: apply semua migration
+- `make migrate-down`: rollback 1 migration
+- `make migrate-force version=<n>`: force versi migration tertentu
+
 Jalankan service:
 
 ```bash
