@@ -477,6 +477,30 @@
           "response": []
         },
         {
+          "name": "get ledger history user 1",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_user1}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/wallet/ledger",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "wallet",
+                "ledger"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
           "name": "get final balance user 1",
           "request": {
             "method": "GET",

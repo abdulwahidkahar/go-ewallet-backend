@@ -56,6 +56,7 @@ func main() {
 		api.POST("/wallet/topups", walletHandler.CreateTopUp)
 		api.POST("/wallet/topups/:reference_id/confirm", walletHandler.ConfirmTopUp)
 		api.GET("/wallet/topups", walletHandler.GetTopUpOrders)
+		api.GET("/wallet/ledger", walletHandler.GetLedgerEntries)
 		api.GET("/wallet/balance", walletHandler.GetBalance)
 		api.POST("/wallet/transfer", walletHandler.Transfer)
 		api.GET("/wallet/transfer", walletHandler.GetHistoryTransfer)

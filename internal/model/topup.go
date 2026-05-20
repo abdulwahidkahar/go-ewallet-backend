@@ -42,3 +42,18 @@ type LedgerEntry struct {
 	TopUpOrderID    *int
 	CreatedAt       string
 }
+
+type LedgerEntryHistory struct {
+	ID              int    `json:"id"`
+	WalletID        int    `json:"wallet_id"`
+	ReferenceID     string `json:"reference_id"`
+	TransactionType string `json:"transaction_type"`
+	Direction       string `json:"direction"`
+	Amount          int64  `json:"amount"`
+	BalanceBefore   int64  `json:"balance_before"`
+	BalanceAfter    int64  `json:"balance_after"`
+	Description     string `json:"description,omitempty"`
+	TransferID      *int   `json:"transfer_id,omitempty"`
+	TopUpOrderID    *int   `json:"top_up_order_id,omitempty"`
+	CreatedAt       string `json:"created_at"`
+}

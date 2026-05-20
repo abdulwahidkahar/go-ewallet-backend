@@ -86,29 +86,6 @@ func (r *WalletRepository) UpdateBalanceTx(ctx context.Context, tx *sql.Tx, user
 	return nil
 }
 
-func (r *WalletRepository) CreateTopUpHistoryTx(ctx context.Context, tx *sql.Tx, userID int, amount int64) error {
-	result, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO top_up_history (wallet_id, amount)
-		SELECT id, $1 FROM wallets WHERE user_id = $2`,
-		amount,
-		userID,
-	)
-	if err != nil {
-		return err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
-		return sql.ErrNoRows
-	}
-
-	return nil
-}
-
 func (r *WalletRepository) GetWalletByIDForUpdateTx(ctx context.Context, tx *sql.Tx, walletID int) (model.WalletBalanceSnapshot, error) {
 	var wallet model.WalletBalanceSnapshot
 
@@ -387,33 +364,4 @@ func resolveQueryRunner(walletRepo *WalletRepository, runner queryRowExecer) que
 	}
 
 	return walletRepo.db
-}
-
-func (r *WalletRepository) TopUpHistory(ctx context.Context, userID int, page, limit int) ([]model.TopUpHistory, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT t.id, t.wallet_id, t.amount, t.created_at
-		FROM top_up_history t
-		JOIN wallets w ON t.wallet_id = w.id
-		WHERE w.user_id = $1
-		ORDER BY t.created_at DESC
-		LIMIT $2 OFFSET $3`, userID, limit, (page-1)*limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var history []model.TopUpHistory
-	for rows.Next() {
-		var topUp model.TopUpHistory
-		err := rows.Scan(&topUp.ID, &topUp.WalletID, &topUp.Amount, &topUp.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-		history = append(history, topUp)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return history, nil
 }

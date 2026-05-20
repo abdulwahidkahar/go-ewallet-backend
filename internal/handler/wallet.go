@@ -19,24 +19,6 @@ func NewWalletHandler(walletService *service.WalletService) *WalletHandler {
 	return &WalletHandler{walletService: walletService}
 }
 
-func (wh *WalletHandler) TopUp(c *gin.Context) {
-	userID := int(c.MustGet("id").(float64))
-
-	var req model.WalletRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
-		return
-	}
-
-	if err := wh.walletService.TopUp(c.Request.Context(), userID, req.Amount); err != nil {
-		statusCode, message := mapWalletError(err)
-		c.JSON(statusCode, gin.H{"error": message})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Wallet topped up successfully", "top_up": req.Amount})
-}
-
 func (wh *WalletHandler) CreateTopUp(c *gin.Context) {
 	userID := int(c.MustGet("id").(float64))
 	idempotencyKey := c.GetHeader("Idempotency-Key")
@@ -152,34 +134,6 @@ func (wh *WalletHandler) GetHistoryTransfer(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"transfers": transfers})
 }
 
-func (wh *WalletHandler) GetHistoryTopUp(c *gin.Context) {
-	userID := int(c.MustGet("id").(float64))
-
-	page := c.DefaultQuery("page", "1")
-	limit := c.DefaultQuery("limit", "10")
-
-	pageInt, err := strconv.Atoi(page)
-	if err != nil || pageInt <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page parameter"})
-		return
-	}
-
-	limitInt, err := strconv.Atoi(limit)
-	if err != nil || limitInt <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
-		return
-	}
-
-	topUps, err := wh.walletService.GetHistoryTopUp(c.Request.Context(), userID, pageInt, limitInt)
-	if err != nil {
-		statusCode, message := mapWalletError(err)
-		c.JSON(statusCode, gin.H{"error": message})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"top_ups": topUps})
-}
-
 func (wh *WalletHandler) GetTopUpOrders(c *gin.Context) {
 	userID := int(c.MustGet("id").(float64))
 
@@ -206,6 +160,34 @@ func (wh *WalletHandler) GetTopUpOrders(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"top_ups": topUps})
+}
+
+func (wh *WalletHandler) GetLedgerEntries(c *gin.Context) {
+	userID := int(c.MustGet("id").(float64))
+
+	page := c.DefaultQuery("page", "1")
+	limit := c.DefaultQuery("limit", "10")
+
+	pageInt, err := strconv.Atoi(page)
+	if err != nil || pageInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page parameter"})
+		return
+	}
+
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil || limitInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit parameter"})
+		return
+	}
+
+	entries, err := wh.walletService.GetLedgerEntries(c.Request.Context(), userID, pageInt, limitInt)
+	if err != nil {
+		statusCode, message := mapWalletError(err)
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ledger_entries": entries})
 }
 
 func mapWalletError(err error) (int, string) {

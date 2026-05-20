@@ -16,10 +16,6 @@ type WalletBalanceSnapshot struct {
 	Currency string
 }
 
-type WalletRequest struct {
-	Amount int64 `json:"amount"`
-}
-
 type WalletResponse struct {
 	ID        int    `json:"id"`
 	UserID    int    `json:"user_id"`

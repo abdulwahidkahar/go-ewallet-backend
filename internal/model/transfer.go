@@ -42,10 +42,3 @@ type TransferHistory struct {
 	Description  string `json:"description,omitempty"`
 	CreatedAt    string `json:"created_at"`
 }
-
-type TopUpHistory struct {
-	ID        int    `json:"id"`
-	WalletID  int    `json:"wallet_id"`
-	Amount    int64  `json:"amount"`
-	CreatedAt string `json:"created_at"`
-}

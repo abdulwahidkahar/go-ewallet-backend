@@ -50,6 +50,7 @@ Detail schema ada di [docs/production-wallet-schema.md](/Users/wahid/Documents/D
 | `POST` | `/api/wallet/topups/:reference_id/confirm` | Yes | Confirm top up order |
 | `GET` | `/api/wallet/topups` | Yes | Ambil riwayat top up order user login |
 | `GET` | `/api/wallet/topup/history` | Yes | Alias history top up order |
+| `GET` | `/api/wallet/ledger` | Yes | Ambil riwayat ledger wallet user login |
 | `POST` | `/api/wallet/transfer` | Yes | Transfer saldo ke wallet lain |
 | `GET` | `/api/wallet/transfer` | Yes | Ambil riwayat transfer user login |
 
@@ -354,6 +355,50 @@ Response:
 }
 ```
 
+### 9. Riwayat Ledger
+
+Request:
+
+```http
+GET /api/wallet/ledger
+Authorization: Bearer <jwt-token>
+```
+
+Response:
+
+```json
+{
+  "ledger_entries": [
+    {
+      "id": 1,
+      "wallet_id": 1,
+      "reference_id": "TRF-20260519093500-ef56ab78",
+      "transaction_type": "transfer",
+      "direction": "debit",
+      "amount": 20000,
+      "balance_before": 50000,
+      "balance_after": 30000,
+      "description": "Bayar kopi",
+      "transfer_id": 1,
+      "created_at": "2026-05-19T09:35:00Z"
+    },
+    {
+      "id": 2,
+      "wallet_id": 1,
+      "reference_id": "TUP-20260519093000-ab12cd34",
+      "transaction_type": "top_up",
+      "direction": "credit",
+      "amount": 50000,
+      "balance_before": 0,
+      "balance_after": 50000,
+      "description": "Simulated payment confirmation",
+      "top_up_order_id": 1,
+      "created_at": "2026-05-19T09:31:10Z"
+    }
+  ]
+}
+```
+
 ## Urutan Testing Manual
 
 1. Jalankan `docker compose up --build`.
@@ -368,7 +413,8 @@ Response:
 10. Cek ulang balance user pertama untuk memastikan saldo bertambah.
 11. Transfer dari user pertama ke `wallet.id` user kedua memakai `POST /api/wallet/transfer`.
 12. Cek `GET /api/wallet/transfer` dan `GET /api/wallet/topups`.
-13. Cek ulang balance kedua user untuk memastikan saldo berubah sesuai transaksi.
+13. Cek `GET /api/wallet/ledger` untuk memastikan debit dan credit tercatat.
+14. Cek ulang balance kedua user untuk memastikan saldo berubah sesuai transaksi.
 
 ## Error Umum
 

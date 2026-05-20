@@ -33,39 +33,6 @@ func NewWalletService(
 	}
 }
 
-func (s *WalletService) TopUp(ctx context.Context, userID int, amount int64) error {
-	if amount <= 0 {
-		return errors.New("amount must be greater than 0")
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		slog.Error("Failed to begin transaction for top-up", "error", err, "user_id", userID, "amount", amount)
-		return err
-	}
-	defer tx.Rollback()
-
-	err = s.walletRepo.UpdateBalanceTx(ctx, tx, userID, amount)
-	if err != nil {
-		slog.Error("Failed to update wallet balance", "error", err, "user_id", userID, "amount", amount)
-		return err
-	}
-
-	if err := s.walletRepo.CreateTopUpHistoryTx(ctx, tx, userID, amount); err != nil {
-		slog.Error("Failed to create top-up history", "error", err, "user_id", userID, "amount", amount)
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		slog.Error("Failed to commit top-up transaction", "error", err, "user_id", userID, "amount", amount)
-		return err
-	}
-
-	slog.Info("Wallet topped up successfully", "user_id", userID, "amount", amount)
-
-	return nil
-}
-
 func (s *WalletService) GetBalance(ctx context.Context, userID int) (int64, error) {
 	balance, err := s.walletRepo.GetBalance(ctx, userID)
 	if err != nil {
@@ -205,15 +172,6 @@ func (s *WalletService) TransferWithIdempotency(ctx context.Context, fromUserID 
 
 func (s *WalletService) GetHistoryTransfer(ctx context.Context, userID int, page, limit int) ([]model.TransferHistory, error) {
 	history, err := s.walletRepo.TransferHistory(ctx, userID, page, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	return history, nil
-}
-
-func (s *WalletService) GetHistoryTopUp(ctx context.Context, userID int, page, limit int) ([]model.TopUpHistory, error) {
-	history, err := s.walletRepo.TopUpHistory(ctx, userID, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +325,10 @@ func (s *WalletService) ConfirmTopUp(ctx context.Context, userID int, referenceI
 
 func (s *WalletService) GetTopUpOrders(ctx context.Context, userID int, page, limit int) ([]model.TopUpOrder, error) {
 	return s.topUpRepo.History(ctx, userID, page, limit)
+}
+
+func (s *WalletService) GetLedgerEntries(ctx context.Context, userID int, page, limit int) ([]model.LedgerEntryHistory, error) {
+	return s.ledgerRepo.History(ctx, userID, page, limit)
 }
 
 func (s *WalletService) reserveIdempotency(ctx context.Context, tx *sql.Tx, userID int, scope, key string, payload any) (model.IdempotencyReserveResult, error) {
