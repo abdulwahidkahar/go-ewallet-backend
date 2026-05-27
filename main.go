@@ -7,17 +7,26 @@ import (
 	"go-ewallet-backend/internal/repository"
 	"go-ewallet-backend/internal/service"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		fmt.Println("error loading env")
+	}
 
 	r := gin.Default()
 
-	if err := godotenv.Load(); err != nil {
-		fmt.Println("error loading env")
+	trustedProxies := []string{"127.0.0.1", "::1"}
+	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
+		trustedProxies = splitAndTrim(raw)
+	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		log.Fatal("error setting trusted proxies:", err)
 	}
 
 	rdb := database.NewRedisClient()
@@ -62,5 +71,26 @@ func main() {
 		api.GET("/wallet/transfer", walletHandler.GetHistoryTransfer)
 	}
 
-	r.Run(":9090")
+	port := os.Getenv("APP_PORT")
+	if port == "" {
+		port = "9090"
+	}
+
+	if err := r.Run(":" + port); err != nil {
+		log.Fatal("error running server:", err)
+	}
+}
+
+func splitAndTrim(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	return result
 }
