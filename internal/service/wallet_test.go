@@ -12,6 +12,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestWalletServiceTransferWithIdempotency_ReturnsErrorForSameWallet(t *testing.T) {
@@ -22,7 +23,7 @@ func TestWalletServiceTransferWithIdempotency_ReturnsErrorForSameWallet(t *testi
 	defer db.Close()
 
 	walletRepo := repository.NewWalletRepository(db)
-	service := NewWalletService(db, walletRepo, nil, nil, nil)
+	service := NewWalletService(db, walletRepo, nil, nil, nil, nil)
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "balance", "currency", "created_at", "updated_at",
@@ -60,7 +61,10 @@ func TestWalletServiceTransferWithIdempotency_ReturnsExistingTransferForSuccessf
 	now := time.Now()
 	walletRepo := repository.NewWalletRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
-	service := NewWalletService(db, walletRepo, nil, nil, NewIdempotencyService(idempotencyRepo))
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+	service := NewWalletService(db, walletRepo, nil, nil, NewIdempotencyService(idempotencyRepo), redisClient)
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "balance", "currency", "created_at", "updated_at",
@@ -186,7 +190,7 @@ func TestWalletServiceCreateTopUp_CreatesPendingOrder(t *testing.T) {
 	walletRepo := repository.NewWalletRepository(db)
 	topUpRepo := repository.NewTopUpRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
-	service := NewWalletService(db, walletRepo, topUpRepo, nil, NewIdempotencyService(idempotencyRepo))
+	service := NewWalletService(db, walletRepo, topUpRepo, nil, NewIdempotencyService(idempotencyRepo), nil)
 
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"SELECT id, user_id, balance, currency, created_at, updated_at FROM wallets WHERE user_id = $1",
@@ -271,7 +275,10 @@ func TestWalletServiceConfirmTopUp_UpdatesBalanceAndWritesLedger(t *testing.T) {
 	topUpRepo := repository.NewTopUpRepository(db)
 	ledgerRepo := repository.NewLedgerRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
-	service := NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, NewIdempotencyService(idempotencyRepo))
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+	service := NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, NewIdempotencyService(idempotencyRepo), redisClient)
 
 	mock.ExpectBegin()
 

@@ -47,7 +47,7 @@ func main() {
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	authService := service.NewAuthService(db, repository.NewUserRepository(db), walletRepo)
 	idempotencyService := service.NewIdempotencyService(idempotencyRepo)
-	walletService := service.NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, idempotencyService)
+	walletService := service.NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, idempotencyService, rdb)
 	authHandler := handler.NewAuthHandler(authService, rdb)
 	walletHandler := handler.NewWalletHandler(walletService)
 

@@ -3,10 +3,15 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"go-ewallet-backend/internal/model"
 	"go-ewallet-backend/internal/repository"
 	"log/slog"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type WalletService struct {
@@ -15,6 +20,7 @@ type WalletService struct {
 	topUpRepo          *repository.TopUpRepository
 	ledgerRepo         *repository.LedgerRepository
 	idempotencyService *IdempotencyService
+	redisClient        *redis.Client
 }
 
 func NewWalletService(
@@ -23,6 +29,7 @@ func NewWalletService(
 	topUpRepo *repository.TopUpRepository,
 	ledgerRepo *repository.LedgerRepository,
 	idempotencyService *IdempotencyService,
+	redisClient *redis.Client,
 ) *WalletService {
 	return &WalletService{
 		db:                 db,
@@ -30,6 +37,7 @@ func NewWalletService(
 		topUpRepo:          topUpRepo,
 		ledgerRepo:         ledgerRepo,
 		idempotencyService: idempotencyService,
+		redisClient:        redisClient,
 	}
 }
 
@@ -166,6 +174,8 @@ func (s *WalletService) TransferWithIdempotency(ctx context.Context, fromUserID 
 	}
 
 	slog.Info("Transfer successful", "from_user_id", fromUserID, "to_wallet_id", req.ToWalletID, "amount", amount)
+
+	s.publishEvent(ctx, "transfer.success", fmt.Sprintf("%d", fromUserID), amount)
 
 	return transfer, nil
 }
@@ -320,7 +330,38 @@ func (s *WalletService) ConfirmTopUp(ctx context.Context, userID int, referenceI
 		return model.TopUpOrder{}, err
 	}
 
+	s.publishEvent(ctx, "transfer.success", fmt.Sprintf("%d", userID), order.Amount)
+
 	return order, nil
+}
+
+func (s *WalletService) publishEvent(ctx context.Context, eventType, userID string, amount int64) {
+	event := map[string]interface{}{
+		"event_id":    fmt.Sprintf("%s-%d", eventType, time.Now().UnixNano()),
+		"type":        eventType,
+		"user_id":     userID,
+		"amount":      amount,
+		"created_at":  time.Now().Format(time.RFC3339),
+		"retry_count": 0,
+		"last_error":  "",
+	}
+
+	payload, err := json.Marshal(event)
+	if err != nil {
+		slog.Error("gagal marshal event notifikasi", "error", err)
+		return
+	}
+
+	err = s.redisClient.XAdd(ctx, &redis.XAddArgs{
+		Stream: "notification:events",
+		Values: map[string]interface{}{
+			"payload": payload,
+		},
+	}).Err()
+
+	if err != nil {
+		slog.Error("gagal publish event notifikasi", "error", err)
+	}
 }
 
 func (s *WalletService) GetTopUpOrders(ctx context.Context, userID int, page, limit int) ([]model.TopUpOrder, error) {

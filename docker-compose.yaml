@@ -3,6 +3,8 @@ services:
     image: redis:alpine
     ports:
       - "6379:6379"
+    networks:
+      - ewallet-network
 
   postgres:
     image: postgres:16
@@ -17,6 +19,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - ewallet-network
 
   backend:
     build: .
@@ -38,3 +42,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    networks:
+      - ewallet-network
+
+networks:
+  ewallet-network:
+    name: ewallet-network
