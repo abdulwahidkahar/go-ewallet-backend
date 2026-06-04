@@ -27,6 +27,10 @@ REST API e-wallet berbasis Go dengan fitur:
 
 Detail schema ada di [docs/production-wallet-schema.md](/Users/wahid/Documents/Development/GOLANG/auth-api/docs/production-wallet-schema.md:1).
 
+### Event Notification
+
+Setiap transfer dan top up yang berhasil akan mempublish event ke Redis Stream, yang dikonsumsi oleh [notification-service](https://github.com/abdulwahidkahar/notification-service) untuk mengirim email notifikasi.
+
 ### Entity Relationship Diagram
 
 ![E-Wallet ERD](docs/e-wallet.svg)
