@@ -1,12 +1,33 @@
 # Go E-Wallet Backend Service
 
-REST API e-wallet berbasis Go dengan fitur:
+Backend e-wallet yang dibangun untuk menjawab satu pertanyaan: **bagaimana memastikan uang tidak pernah salah hitung, bahkan saat request dikirim dua kali atau dua transfer terjadi bersamaan?**
 
-- JWT authentication
-- wallet balance snapshot
-- top up order lifecycle (`pending` -> `success`)
-- idempotent transfer dan top up request
-- immutable ledger entries untuk audit trail
+## TL;DR
+
+- **Idempotent by design** — retry atau double-tap dari client tidak pernah menghasilkan transaksi ganda
+- **Atomic transfer** dengan row-level locking (`SELECT FOR UPDATE`) untuk mencegah race condition saat dua transfer terjadi bersamaan
+- **Immutable audit trail** via double-entry ledger — setiap pergerakan saldo bisa dilacak dan dijelaskan
+- **Stateless auth** dengan JWT + Redis blacklist untuk logout yang aman tanpa membebani database utama
+
+## Kenapa Dibangun Seperti Ini
+
+Sistem pembayaran punya masalah yang tidak muncul di CRUD app biasa: network timeout, retry otomatis dari mobile client, dan concurrent request yang bisa membuat uang "hilang" atau "muncul" kalau tidak ditangani dengan benar. Berikut keputusan teknis untuk menutup celah-celah itu.
+
+### JWT blacklist memakai Redis, bukan PostgreSQL
+
+Logout tidak menghapus JWT yang sudah diterbitkan, jadi token yang sudah logout harus dicek di setiap request terproteksi. Redis dipakai karena in-memory lookup lebih cepat untuk validasi per-request, cocok untuk data invalidation yang sifatnya sementara, dan tidak membebani database utama dengan beban baca tinggi.
+
+### Idempotency untuk setiap request yang memindahkan uang
+
+Request transaksi dari mobile bisa terkirim dua kali karena retry, timeout, atau user menekan tombol berulang. Endpoint seperti create top up, confirm top up, dan transfer memakai `Idempotency-Key` supaya satu intent user tidak pernah menghasilkan dua transaksi, duplicate request mengembalikan hasil lama (bukan diproses ulang), dan payload berbeda dengan key yang sama otomatis ditolak.
+
+### Ledger entries sebagai audit trail immutable
+
+`wallets.balance` hanya dipakai sebagai snapshot saldo saat ini — bukan sumber kebenaran. Sumber audit utama ada di `ledger_entries`: setiap pergerakan saldo punya record debit/credit, tidak pernah di-update ulang setelah dibuat, sehingga jejak uang mudah dijelaskan dan diuji ulang.
+
+### Balance pakai int64, transfer pakai FOR UPDATE
+
+Saldo disimpan sebagai `int64`, bukan `float64`, agar tidak terkena error pembulatan floating-point (masalah klasik di sistem finansial). Untuk transfer, query `FOR UPDATE` mengunci row wallet pengirim dan penerima dalam satu transaction, menekan risiko double spending saat dua transfer menyentuh wallet yang sama secara bersamaan.
 
 ## Tech Stack
 
@@ -41,22 +62,22 @@ Setiap transfer dan top up yang berhasil akan mempublish event ke Redis Stream, 
 
 ## Endpoints
 
-| Method | Path | Auth | Description |
-| --- | --- | --- | --- |
-| `POST` | `/register` | No | Register user baru |
-| `POST` | `/login` | No | Login dan generate JWT |
-| `GET` | `/health` | No | Health check service |
-| `POST` | `/api/logout` | Yes | Invalidate JWT dengan blacklist Redis |
-| `GET` | `/api/profile` | Yes | Ambil profile user dari JWT context |
-| `GET` | `/api/wallet/balance` | Yes | Ambil saldo wallet user login |
-| `POST` | `/api/wallet/topup` | Yes | Alias untuk create top up order |
-| `POST` | `/api/wallet/topups` | Yes | Create top up order baru |
-| `POST` | `/api/wallet/topups/:reference_id/confirm` | Yes | Confirm top up order |
-| `GET` | `/api/wallet/topups` | Yes | Ambil riwayat top up order user login |
-| `GET` | `/api/wallet/topup/history` | Yes | Alias history top up order |
-| `GET` | `/api/wallet/ledger` | Yes | Ambil riwayat ledger wallet user login |
-| `POST` | `/api/wallet/transfer` | Yes | Transfer saldo ke wallet lain |
-| `GET` | `/api/wallet/transfer` | Yes | Ambil riwayat transfer user login |
+| Method | Path                                       | Auth | Description                            |
+| ------ | ------------------------------------------ | ---- | -------------------------------------- |
+| `POST` | `/register`                                | No   | Register user baru                     |
+| `POST` | `/login`                                   | No   | Login dan generate JWT                 |
+| `GET`  | `/health`                                  | No   | Health check service                   |
+| `POST` | `/api/logout`                              | Yes  | Invalidate JWT dengan blacklist Redis  |
+| `GET`  | `/api/profile`                             | Yes  | Ambil profile user dari JWT context    |
+| `GET`  | `/api/wallet/balance`                      | Yes  | Ambil saldo wallet user login          |
+| `POST` | `/api/wallet/topup`                        | Yes  | Alias untuk create top up order        |
+| `POST` | `/api/wallet/topups`                       | Yes  | Create top up order baru               |
+| `POST` | `/api/wallet/topups/:reference_id/confirm` | Yes  | Confirm top up order                   |
+| `GET`  | `/api/wallet/topups`                       | Yes  | Ambil riwayat top up order user login  |
+| `GET`  | `/api/wallet/topup/history`                | Yes  | Alias history top up order             |
+| `GET`  | `/api/wallet/ledger`                       | Yes  | Ambil riwayat ledger wallet user login |
+| `POST` | `/api/wallet/transfer`                     | Yes  | Transfer saldo ke wallet lain          |
+| `GET`  | `/api/wallet/transfer`                     | Yes  | Ambil riwayat transfer user login      |
 
 ## Headers Penting
 
@@ -88,7 +109,7 @@ Prasyarat:
 
 ### Developer Commands
 
-Repo ini sekarang punya `Makefile` sederhana supaya lebih cepat dicoba:
+Repo ini punya `Makefile` sederhana supaya lebih cepat dicoba:
 
 ```bash
 make up
@@ -454,39 +475,3 @@ Response:
 - `400 amount must be greater than 0`: nominal top up atau transfer harus lebih besar dari nol.
 - `400 Insufficient balance`: saldo pengirim tidak cukup untuk transfer.
 - `404 Recipient wallet not found`: `to_wallet_id` tidak ada di tabel `wallets`.
-
-## Keputusan Teknis
-
-### JWT blacklist memakai Redis, bukan PostgreSQL
-
-Logout tidak menghapus JWT yang sudah diterbitkan. Karena itu, token yang sudah logout harus dicek pada setiap request terproteksi.
-
-Redis dipakai untuk blacklist karena:
-
-- in-memory lookup lebih cepat untuk validasi per-request
-- cocok untuk data token invalidation yang sifatnya sementara
-- beban baca tinggi tidak membebani database utama
-
-### Idempotency dipakai untuk request yang memindahkan uang
-
-Request transaksi di mobile bisa terkirim dua kali karena retry, timeout, atau user menekan tombol berulang.
-
-Karena itu, request seperti create top up, confirm top up, dan transfer memakai `Idempotency-Key` agar:
-
-- 1 intent user tidak menghasilkan 2 transaksi
-- duplicate request bisa mengembalikan hasil lama
-- payload yang berbeda dengan key yang sama bisa ditolak
-
-### Ledger entries dipakai sebagai audit trail immutable
-
-`wallets.balance` hanya dipakai sebagai snapshot saldo saat ini.
-
-Sumber audit utama ada di `ledger_entries` karena:
-
-- setiap pergerakan saldo punya record debit/credit
-- ledger tidak di-update ulang setelah dibuat
-- jejak uang lebih mudah dijelaskan dan diuji
-
-### Balance memakai int64 dan transfer memakai FOR UPDATE
-
-Saldo disimpan sebagai `int64`, bukan `float64`, agar tidak terkena error pembulatan floating-point. Untuk transfer, query `FOR UPDATE` dipakai saat membaca wallet pengirim dan penerima agar kedua row terkunci di dalam satu transaksi dan risiko double spending bisa ditekan.

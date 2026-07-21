@@ -45,6 +45,24 @@ services:
     networks:
       - ewallet-network
 
+  migrate:
+    image: migrate/migrate
+    volumes:
+      - ./migrations:/migrations
+    command:
+      [
+        "-path",
+        "/migrations",
+        "-database",
+        "postgres://postgres:password@postgres:5432/auth_api?sslmode=disable",
+        "up",
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ewallet-network
+
 networks:
   ewallet-network:
     name: ewallet-network
