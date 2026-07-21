@@ -326,13 +326,21 @@ func (r *WalletRepository) GetTransferByID(ctx context.Context, runner queryRowE
 }
 
 func (r *WalletRepository) TransferHistory(ctx context.Context, userID int, page, limit int) ([]model.TransferHistory, error) {
+	wallet, err := r.GetWalletByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT t.id, t.from_wallet_id, t.to_wallet_id, t.amount, t.reference_id, t.status, t.description, t.created_at
 		FROM transfers t
-		JOIN wallets w ON (t.from_wallet_id = w.id OR t.to_wallet_id = w.id)
-		WHERE w.user_id = $1
-		ORDER BY t.created_at DESC
-		LIMIT $2 OFFSET $3`, userID, limit, (page-1)*limit)
+		WHERE t.from_wallet_id = $1
+		UNION ALL
+		SELECT t.id, t.from_wallet_id, t.to_wallet_id, t.amount, t.reference_id, t.status, t.description, t.created_at
+		FROM transfers t
+		WHERE t.to_wallet_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3`, wallet.ID, limit, (page-1)*limit)
 	if err != nil {
 		return nil, err
 	}
