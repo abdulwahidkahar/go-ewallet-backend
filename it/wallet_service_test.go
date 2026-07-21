@@ -7,10 +7,13 @@ import (
 	"database/sql"
 	"sync"
 	"testing"
+	"time"
 
 	"go-ewallet-backend/internal/model"
 	"go-ewallet-backend/internal/repository"
 	"go-ewallet-backend/internal/service"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestWalletServiceTransferWithIdempotency_ConcurrentTransfersOnlyOneSucceeds(t *testing.T) {
@@ -69,6 +72,51 @@ func TestWalletServiceTransferWithIdempotency_ConcurrentTransfersOnlyOneSucceeds
 	assertCount(t, store.db, `SELECT COUNT(*) FROM ledger_entries`, 2)
 }
 
+func TestWalletServiceTransfer_ConcurrentOppositeDirectionsDoNotDeadlock(t *testing.T) {
+	store := newIntegrationDB(t)
+	seedWalletTransferFixture(t, store.db)
+	if _, err := store.db.Exec(`UPDATE wallets SET balance = 50000 WHERE id = 2`); err != nil {
+		t.Fatalf("failed to fund recipient wallet: %v", err)
+	}
+
+	svc := newWalletService(store.db)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+
+	transfer := func(fromUserID, toWalletID int, key string) {
+		defer wg.Done()
+		<-start
+		_, err := svc.TransferWithIdempotency(ctx, fromUserID, key, model.TransferRequest{
+			ToWalletID:  toWalletID,
+			Amount:      10000,
+			Description: "opposite direction deadlock test",
+		})
+		results <- err
+	}
+
+	wg.Add(2)
+	go transfer(1, 2, "opposite-direction-1")
+	go transfer(2, 1, "opposite-direction-2")
+
+	close(start)
+	wg.Wait()
+	close(results)
+
+	for err := range results {
+		if err != nil {
+			t.Fatalf("concurrent opposite-direction transfer failed: %v", err)
+		}
+	}
+
+	assertWalletBalance(t, store.db, 1, 50000)
+	assertWalletBalance(t, store.db, 2, 50000)
+	assertCount(t, store.db, `SELECT COUNT(*) FROM transfers`, 2)
+}
+
 func newWalletService(db *sql.DB) *service.WalletService {
 	walletRepo := repository.NewWalletRepository(db)
 	topUpRepo := repository.NewTopUpRepository(db)
@@ -81,6 +129,7 @@ func newWalletService(db *sql.DB) *service.WalletService {
 		topUpRepo,
 		ledgerRepo,
 		service.NewIdempotencyService(idempotencyRepo),
+		redis.NewClient(&redis.Options{Addr: "localhost:6379"}),
 	)
 }
 
