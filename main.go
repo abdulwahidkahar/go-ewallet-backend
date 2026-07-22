@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"go-ewallet-backend/internal/database"
 	"go-ewallet-backend/internal/handler"
@@ -8,7 +9,9 @@ import (
 	"go-ewallet-backend/internal/service"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -45,11 +48,28 @@ func main() {
 	topUpRepo := repository.NewTopUpRepository(db)
 	ledgerRepo := repository.NewLedgerRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
+	outboxRepo := repository.NewOutboxRepository(db)
 	authService := service.NewAuthService(db, repository.NewUserRepository(db), walletRepo)
 	idempotencyService := service.NewIdempotencyService(idempotencyRepo)
-	walletService := service.NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, idempotencyService, rdb)
+	walletService := service.NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, idempotencyService, outboxRepo)
 	authHandler := handler.NewAuthHandler(authService, rdb)
 	walletHandler := handler.NewWalletHandler(walletService)
+
+	// Start outbox publisher worker
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	outboxPublisher := service.NewOutboxPublisher(db, rdb, outboxRepo)
+	go outboxPublisher.Start(ctx)
+
+	// Graceful shutdown on SIGINT/SIGTERM
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		<-quit
+		fmt.Println("Shutting down outbox publisher...")
+		cancel()
+	}()
 
 	r.GET("/health", authHandler.Health)
 	r.POST("/register", authHandler.Register)

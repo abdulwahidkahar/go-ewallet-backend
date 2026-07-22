@@ -7,6 +7,7 @@ Backend e-wallet yang dibangun untuk menjawab satu pertanyaan: **bagaimana memas
 - **Idempotent by design** — retry atau double-tap dari client tidak pernah menghasilkan transaksi ganda
 - **Atomic transfer** dengan row-level locking (`SELECT FOR UPDATE`) untuk mencegah race condition saat dua transfer terjadi bersamaan
 - **Immutable audit trail** via double-entry ledger — setiap pergerakan saldo bisa dilacak dan dijelaskan
+- **Transactional Outbox Pattern** — event notification ditulis atomic bersama transaksi, lalu di-publish ke Redis oleh background worker dengan exponential backoff. Tidak ada event yang hilang, bahkan saat Redis down
 - **Stateless auth** dengan JWT + Redis blacklist untuk logout yang aman tanpa membebani database utama
 
 ## Kenapa Dibangun Seperti Ini
@@ -45,12 +46,33 @@ Saldo disimpan sebagai `int64`, bukan `float64`, agar tidak terkena error pembul
 - `transfers` menyimpan business record transfer.
 - `ledger_entries` menyimpan jejak debit/credit yang immutable.
 - `idempotency_keys` mencegah request ganda memproses uang dua kali.
+- `outbox_events` menyimpan event notification secara atomic bersama transaksi sebelum di-publish ke Redis.
 
-Detail schema ada di [docs/production-wallet-schema.md](/Users/wahid/Documents/Development/GOLANG/auth-api/docs/production-wallet-schema.md:1).
+Detail schema ada di [docs/production-wallet-schema.md](docs/production-wallet-schema.md).
 
-### Event Notification
+### Transactional Outbox Pattern
 
-Setiap transfer dan top up yang berhasil akan mempublish event ke Redis Stream, yang dikonsumsi oleh [notification-service](https://github.com/abdulwahidkahar/notification-service) untuk mengirim email notifikasi.
+Setiap transfer dan top up yang berhasil tidak langsung publish event ke Redis. Sebagai gantinya, event ditulis ke tabel `outbox_events` dalam satu **atomic transaction** bersama business logic (transfer, ledger, dll). Background worker kemudian membaca event PENDING dan mem-publish-nya ke Redis Stream.
+
+![Transactional Outbox Pattern](docs/diagram-outbox.png)
+
+**Kenapa pakai Outbox Pattern?**
+
+Tanpa outbox, event di-publish ke Redis *setelah* commit — jika Redis down di saat itu, event hilang dan notification tidak pernah terkirim. Dengan outbox:
+
+- **Zero event loss** — event tersimpan di PostgreSQL bersama data transaksi, dijamin atomic
+- **Exponential backoff** — jika Redis down, worker retry dengan interval naik (1s → 2s → 4s → ... max 5 menit), tidak membebani Redis saat recovery
+- **FOR UPDATE SKIP LOCKED** — mendukung multiple worker instance tanpa blocking
+- **notification-service tidak perlu diubah** — tetap consume dari Redis Stream `notification:events` seperti biasa
+
+**Komponen:**
+
+| File | Fungsi |
+|------|--------|
+| `internal/model/outbox.go` | Model `OutboxEvent` + status constants |
+| `internal/repository/outbox.go` | `CreateTx`, `GetPendingForPublish`, `MarkPublished`, `RecordRetry` |
+| `internal/service/outbox_publisher.go` | Background worker yang poll → publish → mark |
+| `migrations/000010_create_outbox_events_table` | Schema tabel outbox |
 
 ### Entity Relationship Diagram
 
@@ -148,7 +170,17 @@ API akan berjalan di:
 http://localhost:9090
 ```
 
-Schema terbaru menambah `idempotency_keys`, `top_up_orders`, `ledger_entries`, dan field baru di `transfers`, jadi pastikan migration `000005` sampai `000008` ikut dijalankan.
+Schema terbaru menambah `outbox_events`, jadi pastikan migration `000010` ikut dijalankan:
+
+```bash
+migrate -path migrations -database "postgres://[DB_USER]:[DB_PASSWORD]@localhost:5432/[DB_NAME]?sslmode=disable" up
+```
+
+Atau via Docker Compose:
+
+```bash
+docker compose run --rm migrate
+```
 
 ## Contoh Flow
 

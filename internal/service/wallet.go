@@ -10,8 +10,6 @@ import (
 	"go-ewallet-backend/internal/repository"
 	"log/slog"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 type WalletService struct {
@@ -20,7 +18,7 @@ type WalletService struct {
 	topUpRepo          *repository.TopUpRepository
 	ledgerRepo         *repository.LedgerRepository
 	idempotencyService *IdempotencyService
-	redisClient        *redis.Client
+	outboxRepo         *repository.OutboxRepository
 }
 
 func NewWalletService(
@@ -29,7 +27,7 @@ func NewWalletService(
 	topUpRepo *repository.TopUpRepository,
 	ledgerRepo *repository.LedgerRepository,
 	idempotencyService *IdempotencyService,
-	redisClient *redis.Client,
+	outboxRepo *repository.OutboxRepository,
 ) *WalletService {
 	return &WalletService{
 		db:                 db,
@@ -37,7 +35,7 @@ func NewWalletService(
 		topUpRepo:          topUpRepo,
 		ledgerRepo:         ledgerRepo,
 		idempotencyService: idempotencyService,
-		redisClient:        redisClient,
+		outboxRepo:         outboxRepo,
 	}
 }
 
@@ -168,14 +166,16 @@ func (s *WalletService) TransferWithIdempotency(ctx context.Context, fromUserID 
 		}
 	}
 
+	if err := s.publishEventTx(ctx, tx, "transfer.success", fmt.Sprintf("%d", fromUserID), amount); err != nil {
+		return model.TransferResponse{}, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		slog.Error("Failed to commit transfer transaction", "error", err, "from_user_id", fromUserID, "to_wallet_id", req.ToWalletID, "amount", amount)
 		return model.TransferResponse{}, err
 	}
 
 	slog.Info("Transfer successful", "from_user_id", fromUserID, "to_wallet_id", req.ToWalletID, "amount", amount)
-
-	s.publishEvent(ctx, "transfer.success", fmt.Sprintf("%d", fromUserID), amount)
 
 	return transfer, nil
 }
@@ -326,42 +326,42 @@ func (s *WalletService) ConfirmTopUp(ctx context.Context, userID int, referenceI
 		return model.TopUpOrder{}, err
 	}
 
+	if err := s.publishEventTx(ctx, tx, "topup.confirmed", fmt.Sprintf("%d", userID), order.Amount); err != nil {
+		return model.TopUpOrder{}, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return model.TopUpOrder{}, err
 	}
 
-	s.publishEvent(ctx, "transfer.success", fmt.Sprintf("%d", userID), order.Amount)
-
 	return order, nil
 }
 
-func (s *WalletService) publishEvent(ctx context.Context, eventType, userID string, amount int64) {
+func (s *WalletService) publishEventTx(ctx context.Context, tx *sql.Tx, eventType, userID string, amount int64) error {
 	event := map[string]interface{}{
-		"event_id":    fmt.Sprintf("%s-%d", eventType, time.Now().UnixNano()),
-		"type":        eventType,
-		"user_id":     userID,
-		"amount":      amount,
-		"created_at":  time.Now().Format(time.RFC3339),
-		"retry_count": 0,
-		"last_error":  "",
+		"event_id":   fmt.Sprintf("%s-%d", eventType, time.Now().UnixNano()),
+		"type":       eventType,
+		"user_id":    userID,
+		"amount":     amount,
+		"created_at": time.Now().Format(time.RFC3339),
 	}
 
 	payload, err := json.Marshal(event)
 	if err != nil {
 		slog.Error("gagal marshal event notifikasi", "error", err)
-		return
+		return err
 	}
 
-	err = s.redisClient.XAdd(ctx, &redis.XAddArgs{
-		Stream: "notification:events",
-		Values: map[string]interface{}{
-			"payload": payload,
-		},
-	}).Err()
-
+	_, err = s.outboxRepo.CreateTx(ctx, tx, model.OutboxEvent{
+		EventType: eventType,
+		Payload:   payload,
+	})
 	if err != nil {
-		slog.Error("gagal publish event notifikasi", "error", err)
+		slog.Error("gagal insert outbox event", "error", err, "event_type", eventType)
+		return err
 	}
+
+	return nil
 }
 
 func (s *WalletService) GetTopUpOrders(ctx context.Context, userID int, page, limit int) ([]model.TopUpOrder, error) {

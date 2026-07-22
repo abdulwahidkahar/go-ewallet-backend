@@ -12,7 +12,6 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
-	"github.com/redis/go-redis/v9"
 )
 
 func TestWalletServiceTransferWithIdempotency_ReturnsErrorForSameWallet(t *testing.T) {
@@ -61,10 +60,8 @@ func TestWalletServiceTransferWithIdempotency_ReturnsExistingTransferForSuccessf
 	now := time.Now()
 	walletRepo := repository.NewWalletRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-	})
-	service := NewWalletService(db, walletRepo, nil, nil, NewIdempotencyService(idempotencyRepo), redisClient)
+	outboxRepo := repository.NewOutboxRepository(db)
+	service := NewWalletService(db, walletRepo, nil, nil, NewIdempotencyService(idempotencyRepo), outboxRepo)
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "balance", "currency", "created_at", "updated_at",
@@ -190,7 +187,8 @@ func TestWalletServiceCreateTopUp_CreatesPendingOrder(t *testing.T) {
 	walletRepo := repository.NewWalletRepository(db)
 	topUpRepo := repository.NewTopUpRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
-	service := NewWalletService(db, walletRepo, topUpRepo, nil, NewIdempotencyService(idempotencyRepo), nil)
+	outboxRepo := repository.NewOutboxRepository(db)
+	service := NewWalletService(db, walletRepo, topUpRepo, nil, NewIdempotencyService(idempotencyRepo), outboxRepo)
 
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"SELECT id, user_id, balance, currency, created_at, updated_at FROM wallets WHERE user_id = $1",
@@ -275,10 +273,8 @@ func TestWalletServiceConfirmTopUp_UpdatesBalanceAndWritesLedger(t *testing.T) {
 	topUpRepo := repository.NewTopUpRepository(db)
 	ledgerRepo := repository.NewLedgerRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-	})
-	service := NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, NewIdempotencyService(idempotencyRepo), redisClient)
+	outboxRepo := repository.NewOutboxRepository(db)
+	service := NewWalletService(db, walletRepo, topUpRepo, ledgerRepo, NewIdempotencyService(idempotencyRepo), outboxRepo)
 
 	mock.ExpectBegin()
 
@@ -380,6 +376,14 @@ func TestWalletServiceConfirmTopUp_UpdatesBalanceAndWritesLedger(t *testing.T) {
 	)).
 		WithArgs(12, model.IdempotencyStatusCompleted, "top_up_order_confirm", 1).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		`INSERT INTO outbox_events (event_type, payload, status)
+		VALUES ($1, $2, $3)
+		RETURNING id`,
+	)).
+		WithArgs("topup.confirmed", sqlmock.AnyArg(), model.OutboxStatusPending).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
 	mock.ExpectCommit()
 
