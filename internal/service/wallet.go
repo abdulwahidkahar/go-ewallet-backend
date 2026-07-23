@@ -190,16 +190,16 @@ func (s *WalletService) GetHistoryTransfer(ctx context.Context, userID int, page
 }
 
 func (s *WalletService) CreateTopUp(ctx context.Context, userID int, idempotencyKey string, req model.CreateTopUpRequest) (model.TopUpOrder, error) {
-	if req.Amount <= 0 {
-		return model.TopUpOrder{}, errors.New("amount must be greater than 0")
-	}
-
 	if req.PaymentChannel == "" {
 		req.PaymentChannel = "manual"
 	}
 
 	wallet, err := s.walletRepo.GetWalletByUserID(ctx, userID)
 	if err != nil {
+		return model.TopUpOrder{}, err
+	}
+
+	if _, err := validateAndApplyTopUp(wallet.Balance, req.Amount); err != nil {
 		return model.TopUpOrder{}, err
 	}
 
@@ -237,6 +237,38 @@ func (s *WalletService) CreateTopUp(ctx context.Context, userID int, idempotency
 	}
 
 	return order, nil
+}
+
+func validateAndApplyTopUp(currentBalance int64, amount int64) (int64, error) {
+	if amount <= 0 {
+		return currentBalance, errors.New("amount must be greater than 0")
+	}
+
+	newBalance := currentBalance + amount
+
+	if newBalance < currentBalance {
+		return currentBalance, errors.New("amount causes balance overflow")
+	}
+
+	return newBalance, nil
+}
+
+func validateAndApplyTransfer(senderBalance, recipientBalance, amount int64) (newSenderBalance, newRecipientBalance int64, err error) {
+	if amount <= 0 {
+		return senderBalance, recipientBalance, errors.New("amount must be greater than 0")
+	}
+
+	newSenderBalance = senderBalance - amount
+	if newSenderBalance < 0 {
+		return senderBalance, recipientBalance, errors.New("insufficient balance")
+	}
+
+	newRecipientBalance = recipientBalance + amount
+	if newRecipientBalance < recipientBalance {
+		return senderBalance, recipientBalance, errors.New("amount causes recipient balance overflow")
+	}
+
+	return newSenderBalance, newRecipientBalance, nil
 }
 
 func (s *WalletService) ConfirmTopUp(ctx context.Context, userID int, referenceID, idempotencyKey string, req model.ConfirmTopUpRequest) (model.TopUpOrder, error) {
@@ -290,7 +322,10 @@ func (s *WalletService) ConfirmTopUp(ctx context.Context, userID int, referenceI
 	}
 
 	balanceBefore := wallet.Balance
-	balanceAfter := wallet.Balance + order.Amount
+	balanceAfter, err := validateAndApplyTopUp(wallet.Balance, order.Amount)
+	if err != nil {
+		return model.TopUpOrder{}, err
+	}
 
 	if err := s.walletRepo.UpdateBalanceByWalletIDTx(ctx, tx, order.WalletID, order.Amount); err != nil {
 		return model.TopUpOrder{}, err

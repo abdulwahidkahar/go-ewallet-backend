@@ -206,6 +206,10 @@ func (r *WalletRepository) TransferWithMetadataTx(ctx context.Context, tx *sql.T
 	recipientBalanceBefore := toWallet.Balance
 	recipientBalanceAfter := toWallet.Balance + amount
 
+	if recipientBalanceAfter < toWallet.Balance {
+		return model.TransferResponse{}, errors.New("amount causes recipient balance overflow")
+	}
+
 	_, err = tx.ExecContext(ctx,
 		"UPDATE wallets SET balance = balance - $1 WHERE id = $2",
 		amount, fromWallet.ID,
