@@ -8,10 +8,12 @@ import (
 	"go-ewallet-backend/internal/repository"
 	"go-ewallet-backend/internal/service"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -56,6 +58,13 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService, rdb)
 	walletHandler := handler.NewWalletHandler(walletService)
 
+	// Define rate limiters per action
+	loginLimiter := handler.RateLimiter(rdb, "login", 5, time.Minute)
+	refreshLimiter := handler.RateLimiter(rdb, "refresh", 10, time.Minute)
+	otpLimiter := handler.RateLimiter(rdb, "otp", 3, time.Minute)
+	transferLimiter := handler.RateLimiter(rdb, "transfer", 20, time.Minute)
+	topupLimiter := handler.RateLimiter(rdb, "topup", 50, time.Minute)
+
 	// Start outbox publisher worker
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -74,13 +83,16 @@ func main() {
 
 	r.GET("/health", authHandler.Health)
 	r.POST("/register", authHandler.Register)
-	r.POST("/login", authHandler.Login)
+	r.POST("/login", loginLimiter, authHandler.Login)
 	r.POST("/logout", authHandler.Logout)
 
 	r.POST("/auth/register", authHandler.Register)
-	r.POST("/auth/login", authHandler.Login)
-	r.POST("/auth/refresh", authHandler.Refresh)
+	r.POST("/auth/login", loginLimiter, authHandler.Login)
+	r.POST("/auth/refresh", refreshLimiter, authHandler.Refresh)
 	r.POST("/auth/logout", authHandler.Logout)
+	r.POST("/auth/otp", otpLimiter, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "OTP endpoint ready"})
+	})
 
 	api := r.Group("/api")
 	api.Use(handler.JWTMiddleware(rdb))
@@ -89,14 +101,14 @@ func main() {
 		api.POST("/logout", authHandler.Logout)
 		api.GET("/auth/devices", authHandler.GetDevices)
 		api.DELETE("/auth/devices/:id", authHandler.RevokeDevice)
-		api.POST("/wallet/topup", walletHandler.CreateTopUp)
+		api.POST("/wallet/topup", topupLimiter, walletHandler.CreateTopUp)
 		api.GET("/wallet/topup/history", walletHandler.GetTopUpOrders)
-		api.POST("/wallet/topups", walletHandler.CreateTopUp)
-		api.POST("/wallet/topups/:reference_id/confirm", walletHandler.ConfirmTopUp)
+		api.POST("/wallet/topups", topupLimiter, walletHandler.CreateTopUp)
+		api.POST("/wallet/topups/:reference_id/confirm", topupLimiter, walletHandler.ConfirmTopUp)
 		api.GET("/wallet/topups", walletHandler.GetTopUpOrders)
 		api.GET("/wallet/ledger", walletHandler.GetLedgerEntries)
 		api.GET("/wallet/balance", walletHandler.GetBalance)
-		api.POST("/wallet/transfer", walletHandler.Transfer)
+		api.POST("/wallet/transfer", transferLimiter, walletHandler.Transfer)
 		api.GET("/wallet/transfer", walletHandler.GetHistoryTransfer)
 	}
 

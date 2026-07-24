@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0b7ad7aa-66d2-4f8f-9e06-7f7c670c223a",
     "name": "go-ewallet-backend",
-    "description": "Postman collection for testing auth, refresh token rotation, device sessions, top up, balance, and transfer flows.",
+    "description": "Postman collection for testing auth, refresh token rotation, device sessions, top up, balance, transfer flows, and Redis rate limiting (Login: 5/min, OTP: 3/min, Refresh: 10/min, Transfer: 20/min, Topup: 50/min).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -267,6 +267,34 @@
                 "refresh"
               ]
             }
+          },
+          "response": []
+        },
+        {
+          "name": "request OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email_user1}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/otp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "otp"
+              ]
+            },
+            "description": "Request OTP token (Rate limit: 3 per minute)."
           },
           "response": []
         },

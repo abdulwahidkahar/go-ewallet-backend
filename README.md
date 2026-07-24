@@ -9,6 +9,7 @@ Backend e-wallet yang dibangun untuk menjawab satu pertanyaan: **bagaimana memas
 - **Immutable audit trail** via double-entry ledger — setiap pergerakan saldo bisa dilacak dan dijelaskan
 - **Transactional Outbox Pattern** — event notification ditulis atomic bersama transaksi, lalu di-publish ke Redis oleh background worker dengan exponential backoff. Tidak ada event yang hilang, bahkan saat Redis down
 - **Stateless auth** dengan JWT + Redis blacklist untuk logout yang aman tanpa membebani database utama
+- **Redis Rate Limiting** — melindungi endpoint sensitif (login, OTP, transfer, topup, refresh token) dari abuse & brute-force attack dengan HTTP 429 Too Many Requests
 
 ## Kenapa Dibangun Seperti Ini
 
@@ -84,22 +85,44 @@ Tanpa outbox, event di-publish ke Redis *setelah* commit — jika Redis down di 
 
 ## Endpoints
 
-| Method | Path                                       | Auth | Description                            |
-| ------ | ------------------------------------------ | ---- | -------------------------------------- |
-| `POST` | `/register`                                | No   | Register user baru                     |
-| `POST` | `/login`                                   | No   | Login dan generate JWT                 |
-| `GET`  | `/health`                                  | No   | Health check service                   |
-| `POST` | `/api/logout`                              | Yes  | Invalidate JWT dengan blacklist Redis  |
-| `GET`  | `/api/profile`                             | Yes  | Ambil profile user dari JWT context    |
-| `GET`  | `/api/wallet/balance`                      | Yes  | Ambil saldo wallet user login          |
-| `POST` | `/api/wallet/topup`                        | Yes  | Alias untuk create top up order        |
-| `POST` | `/api/wallet/topups`                       | Yes  | Create top up order baru               |
-| `POST` | `/api/wallet/topups/:reference_id/confirm` | Yes  | Confirm top up order                   |
-| `GET`  | `/api/wallet/topups`                       | Yes  | Ambil riwayat top up order user login  |
-| `GET`  | `/api/wallet/topup/history`                | Yes  | Alias history top up order             |
-| `GET`  | `/api/wallet/ledger`                       | Yes  | Ambil riwayat ledger wallet user login |
-| `POST` | `/api/wallet/transfer`                     | Yes  | Transfer saldo ke wallet lain          |
-| `GET`  | `/api/wallet/transfer`                     | Yes  | Ambil riwayat transfer user login      |
+| Method | Path                                       | Auth | Rate Limit | Description                            |
+| ------ | ------------------------------------------ | ---- | ---------- | -------------------------------------- |
+| `POST` | `/register`                                | No   | -          | Register user baru                     |
+| `POST` | `/login`                                   | No   | 5/min      | Login dan generate JWT                 |
+| `POST` | `/auth/login`                              | No   | 5/min      | Login (auth prefix)                    |
+| `POST` | `/auth/refresh`                            | No   | 10/min     | Refresh access token                   |
+| `POST` | `/auth/otp`                                | No   | 3/min      | Request OTP token                      |
+| `GET`  | `/health`                                  | No   | -          | Health check service                   |
+| `POST` | `/api/logout`                              | Yes  | -          | Invalidate JWT dengan blacklist Redis  |
+| `GET`  | `/api/profile`                             | Yes  | -          | Ambil profile user dari JWT context    |
+| `GET`  | `/api/wallet/balance`                      | Yes  | -          | Ambil saldo wallet user login          |
+| `POST` | `/api/wallet/topup`                        | Yes  | 50/min     | Alias untuk create top up order        |
+| `POST` | `/api/wallet/topups`                       | Yes  | 50/min     | Create top up order baru               |
+| `POST` | `/api/wallet/topups/:reference_id/confirm` | Yes  | 50/min     | Confirm top up order                   |
+| `GET`  | `/api/wallet/topups`                       | Yes  | -          | Ambil riwayat top up order user login  |
+| `GET`  | `/api/wallet/topup/history`                | Yes  | -          | Alias history top up order             |
+| `GET`  | `/api/wallet/ledger`                       | Yes  | -          | Ambil riwayat ledger wallet user login |
+| `POST` | `/api/wallet/transfer`                     | Yes  | 20/min     | Transfer saldo ke wallet lain          |
+| `GET`  | `/api/wallet/transfer`                     | Yes  | -          | Ambil riwayat transfer user login      |
+
+## Rate Limiting (Redis)
+
+Sistem menggunakan Redis Rate Limiter berbasis script Lua atomic (`INCR` + `EXPIRE`) untuk mencegah brute force & spam request pada endpoint penting:
+
+| Endpoint | Action | Limit | Window | Identifier |
+| --- | --- | --- | --- | --- |
+| `POST /login`, `POST /auth/login` | `login` | **5** kali | 1 Menit | Client IP (`ip:<ip>`) |
+| `POST /auth/otp` | `otp` | **3** kali | 1 Menit | Client IP (`ip:<ip>`) |
+| `POST /auth/refresh` | `refresh` | **10** kali | 1 Menit | Client IP (`ip:<ip>`) |
+| `POST /api/wallet/transfer` | `transfer` | **20** kali | 1 Menit | User ID (`user:<id>`) / Client IP |
+| `POST /api/wallet/topup`, `POST /api/wallet/topups` | `topup` | **50** kali | 1 Menit | User ID (`user:<id>`) / Client IP |
+
+Response Header yang dikirim pada setiap request:
+- `X-RateLimit-Limit`: Batas maksimum request per window.
+- `X-RateLimit-Remaining`: Sisa request yang diperbolehkan.
+- `X-RateLimit-Reset`: Timestamp UNIX kapan limit ter-reset.
+
+Jika batas terlampaui, server mengembalikan status **HTTP 429 Too Many Requests** beserta header `Retry-After: <detik>`.
 
 ## Headers Penting
 
